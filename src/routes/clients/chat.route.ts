@@ -7,6 +7,7 @@ import { authMiddleware } from "../../middlewares/client/auth.middleware";
 
 
 
-router.get("/list-recomendation", authMiddleware, controller.listFriends);
+router.get("/rooms", authMiddleware, controller.getRoom);
+router.get(`/message/:roomId`, authMiddleware, controller.getMessage);
 
 export const chatsRoutes = router;

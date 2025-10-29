@@ -7,6 +7,7 @@ export interface IMessage extends Document {
   content: string; // Nội dung tin nhắn
   type: "text" | "call"; // Loại tin nhắn
   is_read: boolean; // Đã đọc hay chưa
+  is_recalled: boolean;
   timestamp: Date; // Thời điểm gửi
 }
 
@@ -17,6 +18,7 @@ const messageSchema = new Schema<IMessage>({
   content: { type: String, required: true },
   type: { type: String, enum: ["text", "call"], default: "text" },
   is_read: { type: Boolean, default: false },
+  is_recalled: { type: Boolean, default: false },
   timestamp: { type: Date, default: Date.now },
 });
 
