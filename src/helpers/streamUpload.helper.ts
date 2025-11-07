@@ -57,3 +57,31 @@ export const streamUpload = async (
     streamifier.createReadStream(buffer).pipe(uploadStream);
   });
 };
+
+
+export const uploadToCloudinaryWithTags= (
+  buffer: Buffer
+): Promise<{ url: string; tags: string[] }> => {
+  return new Promise((resolve, reject) => {
+    cloudinary.uploader
+      .upload_stream(
+        {
+          resource_type: "image",
+          auto_tagging: 0.75,
+          categorization: "google_tagging",
+          max_results: 5,
+        },
+        (error, result) => {
+          if (error || !result) return reject(error || new Error("Upload failed"));
+          const tags = (result.tags || []).map((t: string) =>
+            t.toLowerCase().trim()
+          );
+          resolve({
+            url: result.secure_url,
+            tags,
+          });
+        }
+      )
+      .end(buffer);
+  });
+};

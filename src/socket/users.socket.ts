@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { UserModel } from "../models/users.model";
 import { RoomChatModel } from "../models/room-chat.model";
 import { MessageModel } from "../models/messages.model";
+import { streamUpload } from "../helpers/streamUpload.helper";
 
 export const setupSocket = (io: any) => {
   io.on("connection", (socket: any) => {
@@ -363,10 +364,15 @@ export const setupSocket = (io: any) => {
               myId: myId,
               friendId: friendId,
               myInfo: myInfo,
-              targetInfo: targetInfo,
             }
           );
         }
+        socket.emit("SERVER_RETURN_REQUEST_REMOVE_FRIEND", {
+          myId: myId,
+          friendId: friendId,
+          myInfo: myInfo,
+          targetInfo: targetInfo,
+        });
       } catch (error: any) {
         socket.emit("error", {
           status: 500,
@@ -376,267 +382,338 @@ export const setupSocket = (io: any) => {
     });
 
     // Chat SOCKET
-    socket.on("CLIENT_SEND_MESSAGE", async (message: { room_id: string; sender_id: string; receiver_id: string; content: string; type: "text" | "call" }) => {
-      try {
-        console.log(`Message received: room_id=${message.room_id}, sender_id=${message.sender_id}, receiver_id=${message.receiver_id}`);
-        const { ObjectId } = require("mongoose").Types;
-
-        if (!ObjectId.isValid(message.room_id) || !ObjectId.isValid(message.sender_id) || !ObjectId.isValid(message.receiver_id)) {
-          console.log("Invalid ObjectId:", { room_id: message.room_id, sender_id: message.sender_id, receiver_id: message.receiver_id });
-          socket.emit("error", {
-            status: 400,
-            message: "ID không hợp lệ!",
-          });
-          return;
-        }
-
-        if (!message.content.trim()) {
-          socket.emit("error", {
-            status: 400,
-            message: "Nội dung tin nhắn không được để trống!",
-          });
-          return;
-        }
-
-        // Lưu tin nhắn
-        const newMessage = await MessageModel.create({
-          room_id: message.room_id,
-          sender_id: message.sender_id,
-          receiver_id: message.receiver_id,
-          content: message.content,
-          type: message.type,
-          is_read: false,
-          timestamp: new Date(),
-        });
-
-        // Cập nhật last_message và updated_at
-        await RoomChatModel.updateOne(
-          { _id: message.room_id },
-          { last_message: newMessage._id, updated_at: new Date() }
-        );
-
-        // Gửi tin nhắn đến cả hai người
-        const roomChat = await RoomChatModel.findById(message.room_id).lean();
-        if (!roomChat) {
-          socket.emit("error", {
-            status: 404,
-            message: "Không tìm thấy phòng chat!",
-          });
-          return;
-        }
-
-        const participants = roomChat.participants;
-        for (const userId of participants) {
-          const user = await UserModel.findById(userId).lean();
-          if (user?.socketId) {
-            io.to(user.socketId).emit("SERVER_RETURN_MESSAGE", newMessage);
-          }
-        }
-      } catch (error: any) {
-        console.error(`Lỗi CLIENT_SEND_MESSAGE (room_id=${message.room_id}, sender_id=${message.sender_id}):`, error);
-        socket.emit("error", {
-          status: 500,
-          message: "Lỗi server khi gửi tin nhắn!",
-        });
-      }
-    });
-
-    socket.on("CLIENT_MARK_MESSAGES_READ", async ({ room_id, user_id }: { room_id: string; user_id: string }) => {
-      try {
-        console.log(`Mark messages read: room_id=${room_id}, user_id=${user_id}`);
-        const { ObjectId } = require("mongoose").Types;
-
-        if (!ObjectId.isValid(room_id) || !ObjectId.isValid(user_id)) {
-          console.log("Invalid ObjectId:", { room_id, user_id });
-          socket.emit("error", {
-            status: 400,
-            message: "ID không hợp lệ!",
-          });
-          return;
-        }
-
-        // Đánh dấu tin nhắn chưa đọc là đã đọc
-        await MessageModel.updateMany(
-          { room_id, receiver_id: user_id, is_read: false },
-          { is_read: true }
-        );
-
-        // Thông báo đến người gửi
-        const roomChat = await RoomChatModel.findById(room_id).lean();
-        if (!roomChat) return;
-
-        const participants = roomChat.participants;
-        for (const participantId of participants) {
-          if (participantId.toString() !== user_id) {
-            const user = await UserModel.findById(participantId).lean();
-            if (user?.socketId) {
-              io.to(user.socketId).emit("SERVER_RETURN_MESSAGES_READ", { room_id, user_id });
-            }
-          }
-        }
-      } catch (error: any) {
-        console.error(`Lỗi CLIENT_MARK_MESSAGES_READ (room_id=${room_id}, user_id=${user_id}):`, error);
-        socket.emit("error", {
-          status: 500,
-          message: "Lỗi server khi đánh dấu tin nhắn đã đọc!",
-        });
-      }
-    });
-
-
-    socket.on("CLIENT_RECALL_MESSAGE", async ({ room_id, message_id, user_id }: { room_id: string; message_id: string; user_id: string }) => {
-      try {
-        console.log(`Recall message: room_id=${room_id}, message_id=${message_id}, user_id=${user_id}`);
-        const { ObjectId } = require("mongoose").Types;
-
-        if (!ObjectId.isValid(room_id) || !ObjectId.isValid(message_id) || !ObjectId.isValid(user_id)) {
-          console.log("Invalid ObjectId:", { room_id, message_id, user_id });
-          socket.emit("error", {
-            status: 400,
-            message: "ID không hợp lệ!",
-          });
-          return;
-        }
-
-        // Kiểm tra tin nhắn
-        const message = await MessageModel.findById(message_id).lean();
-        if (!message) {
-          socket.emit("error", {
-            status: 404,
-            message: "Không tìm thấy tin nhắn!",
-          });
-          return;
-        }
-
-        // Kiểm tra quyền thu hồi (chỉ sender_id được thu hồi)
-        if (message.sender_id.toString() !== user_id) {
-          socket.emit("error", {
-            status: 403,
-            message: "Bạn không có quyền thu hồi tin nhắn này!",
-          });
-          return;
-        }
-
-        // Cập nhật tin nhắn thành đã thu hồi
-        await MessageModel.updateOne(
-          { _id: message_id },
-          { is_recalled: true, content: "Tin nhắn đã bị thu hồi" }
-        );
-
-        // Kiểm tra và cập nhật last_message trong RoomChatModel
-        const roomChat = await RoomChatModel.findById(room_id).lean();
-        if (roomChat && roomChat.last_message?.toString() === message_id) {
-          await RoomChatModel.updateOne(
-            { _id: room_id },
-            {
-              last_message: await MessageModel.findById(message_id).lean(),
-              updated_at: new Date(),
-            }
+    socket.on(
+      "CLIENT_SEND_MESSAGE",
+      async (message: {
+        room_id: string;
+        sender_id: string;
+        receiver_id: string;
+        content: string;
+        image_url: string;
+        type: "text" | "call" | "image";
+      }) => {
+        try {
+          console.log(
+            `Message received: room_id=${message.room_id}, sender_id=${message.sender_id}, receiver_id=${message.receiver_id}`
           );
-        }
+          const { ObjectId } = require("mongoose").Types;
 
-        // Gửi sự kiện thu hồi đến cả hai người
-        const participants = roomChat.participants;
-        for (const participantId of participants) {
-          const user = await UserModel.findById(participantId).lean();
-          if (user?.socketId) {
-            io.to(user.socketId).emit("SERVER_RETURN_RECALL_MESSAGE", {
-              message_id,
-              room_id,
+          if (
+            !ObjectId.isValid(message.room_id) ||
+            !ObjectId.isValid(message.sender_id) ||
+            !ObjectId.isValid(message.receiver_id)
+          ) {
+            console.log("Invalid ObjectId:", {
+              room_id: message.room_id,
+              sender_id: message.sender_id,
+              receiver_id: message.receiver_id,
             });
+            socket.emit("error", {
+              status: 400,
+              message: "ID không hợp lệ!",
+            });
+            return;
           }
-        }
-      } catch (error: any) {
-        console.error(`Lỗi CLIENT_RECALL_MESSAGE (room_id=${room_id}, message_id=${message_id}):`, error);
-        socket.emit("error", {
-          status: 500,
-          message: "Lỗi server khi thu hồi tin nhắn!",
-        });
-      }
-    });
 
+          if (!message.content.trim()) {
+            socket.emit("error", {
+              status: 400,
+              message: "Nội dung tin nhắn không được để trống!",
+            });
+            return;
+          }
 
-    socket.on("CLIENT_TYPING", async ({ room_id, user_id }: { room_id: string; user_id: string }) => {
-      try {
-        console.log(`Typing: room_id=${room_id}, user_id=${user_id}`);
-        const { ObjectId } = require("mongoose").Types;
-
-        if (!ObjectId.isValid(room_id) || !ObjectId.isValid(user_id)) {
-          console.log("Invalid ObjectId:", { room_id, user_id });
-          socket.emit("error", {
-            status: 400,
-            message: "ID không hợp lệ!",
+          // Lưu tin nhắn
+          const newMessage = await MessageModel.create({
+            room_id: message.room_id,
+            sender_id: message.sender_id,
+            receiver_id: message.receiver_id,
+            content: message.content,
+            image_url: message.image_url,
+            type: message.type,
+            is_read: false,
+            timestamp: new Date(),
           });
-          return;
-        }
 
-        const roomChat = await RoomChatModel.findById(room_id).lean();
-        if (!roomChat) {
-          socket.emit("error", {
-            status: 404,
-            message: "Không tìm thấy phòng chat!",
-          });
-          return;
-        }
+          // Cập nhật last_message và updated_at
+          await RoomChatModel.updateOne(
+            { _id: message.room_id },
+            { last_message: newMessage._id, updated_at: new Date() }
+          );
 
-        const participants = roomChat.participants;
-        for (const participantId of participants) {
-          if (participantId.toString() !== user_id) {
-            const user = await UserModel.findById(participantId).lean();
+          // Gửi tin nhắn đến cả hai người
+          const roomChat = await RoomChatModel.findById(message.room_id).lean();
+          if (!roomChat) {
+            socket.emit("error", {
+              status: 404,
+              message: "Không tìm thấy phòng chat!",
+            });
+            return;
+          }
+
+          const participants = roomChat.participants;
+          for (const userId of participants) {
+            const user = await UserModel.findById(userId).lean();
             if (user?.socketId) {
-              io.to(user.socketId).emit("SERVER_RETURN_TYPING", { room_id, user_id });
+              io.to(user.socketId).emit("SERVER_RETURN_MESSAGE", newMessage);
             }
           }
+        } catch (error: any) {
+          console.error(
+            `Lỗi CLIENT_SEND_MESSAGE (room_id=${message.room_id}, sender_id=${message.sender_id}):`,
+            error
+          );
+          socket.emit("error", {
+            status: 500,
+            message: "Lỗi server khi gửi tin nhắn!",
+          });
         }
-      } catch (error: any) {
-        console.error(`Lỗi CLIENT_TYPING (room_id=${room_id}, user_id=${user_id}):`, error);
-        socket.emit("error", {
-          status: 500,
-          message: "Lỗi server khi xử lý typing!",
-        });
       }
-    });
+    );
 
-    socket.on("CLIENT_STOP_TYPING", async ({ room_id, user_id }: { room_id: string; user_id: string }) => {
-      try {
-        console.log(`Stop typing: room_id=${room_id}, user_id=${user_id}`);
-        const { ObjectId } = require("mongoose").Types;
+    socket.on(
+      "CLIENT_MARK_MESSAGES_READ",
+      async ({ room_id, user_id }: { room_id: string; user_id: string }) => {
+        try {
+          console.log(
+            `Mark messages read: room_id=${room_id}, user_id=${user_id}`
+          );
+          const { ObjectId } = require("mongoose").Types;
 
-        if (!ObjectId.isValid(room_id) || !ObjectId.isValid(user_id)) {
-          console.log("Invalid ObjectId:", { room_id, user_id });
-          socket.emit("error", {
-            status: 400,
-            message: "ID không hợp lệ!",
-          });
-          return;
-        }
+          if (!ObjectId.isValid(room_id) || !ObjectId.isValid(user_id)) {
+            console.log("Invalid ObjectId:", { room_id, user_id });
+            socket.emit("error", {
+              status: 400,
+              message: "ID không hợp lệ!",
+            });
+            return;
+          }
 
-        const roomChat = await RoomChatModel.findById(room_id).lean();
-        if (!roomChat) {
-          socket.emit("error", {
-            status: 404,
-            message: "Không tìm thấy phòng chat!",
-          });
-          return;
-        }
+          // Đánh dấu tin nhắn chưa đọc là đã đọc
+          await MessageModel.updateMany(
+            { room_id, receiver_id: user_id, is_read: false },
+            { is_read: true }
+          );
 
-        const participants = roomChat.participants;
-        for (const participantId of participants) {
-          if (participantId.toString() !== user_id) {
-            const user = await UserModel.findById(participantId).lean();
-            if (user?.socketId) {
-              io.to(user.socketId).emit("SERVER_RETURN_STOP_TYPING", { room_id, user_id });
+          // Thông báo đến người gửi
+          const roomChat = await RoomChatModel.findById(room_id).lean();
+          if (!roomChat) return;
+
+          const participants = roomChat.participants;
+          for (const participantId of participants) {
+            if (participantId.toString() !== user_id) {
+              const user = await UserModel.findById(participantId).lean();
+              if (user?.socketId) {
+                io.to(user.socketId).emit("SERVER_RETURN_MESSAGES_READ", {
+                  room_id,
+                  user_id,
+                });
+              }
             }
           }
+        } catch (error: any) {
+          console.error(
+            `Lỗi CLIENT_MARK_MESSAGES_READ (room_id=${room_id}, user_id=${user_id}):`,
+            error
+          );
+          socket.emit("error", {
+            status: 500,
+            message: "Lỗi server khi đánh dấu tin nhắn đã đọc!",
+          });
         }
-      } catch (error: any) {
-        console.error(`Lỗi CLIENT_STOP_TYPING (room_id=${room_id}, user_id=${user_id}):`, error);
-        socket.emit("error", {
-          status: 500,
-          message: "Lỗi server khi xử lý stop typing!",
-        });
       }
-    });
+    );
+
+    socket.on(
+      "CLIENT_RECALL_MESSAGE",
+      async ({
+        room_id,
+        message_id,
+        user_id,
+      }: {
+        room_id: string;
+        message_id: string;
+        user_id: string;
+      }) => {
+        try {
+          console.log(
+            `Recall message: room_id=${room_id}, message_id=${message_id}, user_id=${user_id}`
+          );
+          const { ObjectId } = require("mongoose").Types;
+
+          if (
+            !ObjectId.isValid(room_id) ||
+            !ObjectId.isValid(message_id) ||
+            !ObjectId.isValid(user_id)
+          ) {
+            console.log("Invalid ObjectId:", { room_id, message_id, user_id });
+            socket.emit("error", {
+              status: 400,
+              message: "ID không hợp lệ!",
+            });
+            return;
+          }
+
+          // Kiểm tra tin nhắn
+          const message = await MessageModel.findById(message_id).lean();
+          if (!message) {
+            socket.emit("error", {
+              status: 404,
+              message: "Không tìm thấy tin nhắn!",
+            });
+            return;
+          }
+
+          // Kiểm tra quyền thu hồi (chỉ sender_id được thu hồi)
+          if (message.sender_id.toString() !== user_id) {
+            socket.emit("error", {
+              status: 403,
+              message: "Bạn không có quyền thu hồi tin nhắn này!",
+            });
+            return;
+          }
+
+          // Cập nhật tin nhắn thành đã thu hồi
+          await MessageModel.updateOne(
+            { _id: message_id },
+            { is_recalled: true, content: "Tin nhắn đã bị thu hồi" }
+          );
+
+          // Kiểm tra và cập nhật last_message trong RoomChatModel
+          const roomChat = await RoomChatModel.findById(room_id).lean();
+          if (roomChat && roomChat.last_message?.toString() === message_id) {
+            await RoomChatModel.updateOne(
+              { _id: room_id },
+              {
+                last_message: await MessageModel.findById(message_id).lean(),
+                updated_at: new Date(),
+              }
+            );
+          }
+
+          // Gửi sự kiện thu hồi đến cả hai người
+          const participants = roomChat.participants;
+          for (const participantId of participants) {
+            const user = await UserModel.findById(participantId).lean();
+            if (user?.socketId) {
+              io.to(user.socketId).emit("SERVER_RETURN_RECALL_MESSAGE", {
+                message_id,
+                room_id,
+              });
+            }
+          }
+        } catch (error: any) {
+          console.error(
+            `Lỗi CLIENT_RECALL_MESSAGE (room_id=${room_id}, message_id=${message_id}):`,
+            error
+          );
+          socket.emit("error", {
+            status: 500,
+            message: "Lỗi server khi thu hồi tin nhắn!",
+          });
+        }
+      }
+    );
+
+    socket.on(
+      "CLIENT_TYPING",
+      async ({ room_id, user_id }: { room_id: string; user_id: string }) => {
+        try {
+          console.log(`Typing: room_id=${room_id}, user_id=${user_id}`);
+          const { ObjectId } = require("mongoose").Types;
+
+          if (!ObjectId.isValid(room_id) || !ObjectId.isValid(user_id)) {
+            console.log("Invalid ObjectId:", { room_id, user_id });
+            socket.emit("error", {
+              status: 400,
+              message: "ID không hợp lệ!",
+            });
+            return;
+          }
+
+          const roomChat = await RoomChatModel.findById(room_id).lean();
+          if (!roomChat) {
+            socket.emit("error", {
+              status: 404,
+              message: "Không tìm thấy phòng chat!",
+            });
+            return;
+          }
+
+          const participants = roomChat.participants;
+          for (const participantId of participants) {
+            if (participantId.toString() !== user_id) {
+              const user = await UserModel.findById(participantId).lean();
+              if (user?.socketId) {
+                io.to(user.socketId).emit("SERVER_RETURN_TYPING", {
+                  room_id,
+                  user_id,
+                });
+              }
+            }
+          }
+        } catch (error: any) {
+          console.error(
+            `Lỗi CLIENT_TYPING (room_id=${room_id}, user_id=${user_id}):`,
+            error
+          );
+          socket.emit("error", {
+            status: 500,
+            message: "Lỗi server khi xử lý typing!",
+          });
+        }
+      }
+    );
+
+    socket.on(
+      "CLIENT_STOP_TYPING",
+      async ({ room_id, user_id }: { room_id: string; user_id: string }) => {
+        try {
+          console.log(`Stop typing: room_id=${room_id}, user_id=${user_id}`);
+          const { ObjectId } = require("mongoose").Types;
+
+          if (!ObjectId.isValid(room_id) || !ObjectId.isValid(user_id)) {
+            console.log("Invalid ObjectId:", { room_id, user_id });
+            socket.emit("error", {
+              status: 400,
+              message: "ID không hợp lệ!",
+            });
+            return;
+          }
+
+          const roomChat = await RoomChatModel.findById(room_id).lean();
+          if (!roomChat) {
+            socket.emit("error", {
+              status: 404,
+              message: "Không tìm thấy phòng chat!",
+            });
+            return;
+          }
+
+          const participants = roomChat.participants;
+          for (const participantId of participants) {
+            if (participantId.toString() !== user_id) {
+              const user = await UserModel.findById(participantId).lean();
+              if (user?.socketId) {
+                io.to(user.socketId).emit("SERVER_RETURN_STOP_TYPING", {
+                  room_id,
+                  user_id,
+                });
+              }
+            }
+          }
+        } catch (error: any) {
+          console.error(
+            `Lỗi CLIENT_STOP_TYPING (room_id=${room_id}, user_id=${user_id}):`,
+            error
+          );
+          socket.emit("error", {
+            status: 500,
+            message: "Lỗi server khi xử lý stop typing!",
+          });
+        }
+      }
+    );
 
     // Sự kiện ngắt kết nối
     socket.on("disconnect", async () => {
