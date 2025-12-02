@@ -8,6 +8,7 @@ import { friendsRoutes } from "./friends.route";
 import { Express  } from "express";
 import { chatsRoutes } from "./chat.route";
 import { postsRoutes } from "./posts.route";
+import { datingRoute } from "./dating.route";
 
 
 export const routesClientApi = (app : Express) => {
@@ -16,4 +17,5 @@ export const routesClientApi = (app : Express) => {
     app.use("/friends" , friendsRoutes)
     app.use("/chats" , chatsRoutes)
     app.use("/posts", postsRoutes)
+    app.use("/datings" , datingRoute)
 }

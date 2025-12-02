@@ -1,33 +1,48 @@
-import mongoose, { Schema, Document, Model } from 'mongoose';
+// models/Match.ts
+import mongoose, { Schema, Document, Model } from "mongoose";
 
-
-interface IMatch extends Document {
-  user1_id: mongoose.Types.ObjectId; // ID người dùng 1 trong cặp match
-  user2_id: mongoose.Types.ObjectId; // ID người dùng 2 trong cặp match
-  start_date: Date; // Thời gian bắt đầu match (khi ghép đôi thành công)
-  end_date: Date; // Thời gian kết thúc match (sau 7 ngày)
-  status: string; // Trạng thái: active, accepted (kết bạn), canceled (hủy)
-  accepted_by: mongoose.Types.ObjectId[]; // Danh sách ID người chấp nhận match
-  canceled_by: mongoose.Types.ObjectId | null; // ID người hủy match (nếu có)
-  created_at: Date; // Thời gian tạo match
+export interface IMatch extends Document {
+  user1_id: mongoose.Types.ObjectId;
+  user2_id: mongoose.Types.ObjectId;
+  status: "pending" | "accepted" | "rejected" | "expired";
+  user1_accept: boolean;
+  user2_accept: boolean;
+  chat_room_id: mongoose.Types.ObjectId; // ref RoomChat
+  created_at: Date;
+  expires_at: Date; // 7 ngày
 }
 
-// Schema cho Matches
-const matchSchema: Schema<IMatch> = new Schema<IMatch>({
-  user1_id: { type: Schema.Types.ObjectId, ref: 'User', required: true }, // Người dùng 1
-  user2_id: { type: Schema.Types.ObjectId, ref: 'User', required: true }, // Người dùng 2
-  start_date: { type: Date, required: true }, // Bắt đầu match
-  end_date: { type: Date, required: true }, // Kết thúc sau 7 ngày
-  status: { type: String, enum: ['active', 'accepted', 'canceled'], default: 'active' }, // Trạng thái match
-  accepted_by: [{ type: Schema.Types.ObjectId, ref: 'User' }], // Người chấp nhận (cả hai để kết bạn)
-  canceled_by: { type: Schema.Types.ObjectId, ref: 'User', default: null }, // Người hủy (nếu có)
-  created_at: { type: Date, default: Date.now } // Thời gian tạo
+const matchSchema = new Schema<IMatch>({
+  user1_id: { type: Schema.Types.ObjectId, ref: "User", required: true },
+  user2_id: { type: Schema.Types.ObjectId, ref: "User", required: true },
+  status: {
+    type: String,
+    enum: ["pending", "accepted", "rejected", "expired"],
+    default: "pending",
+  },
+  user1_accept: { type: Boolean, default: false },
+  user2_accept: { type: Boolean, default: false },
+  chat_room_id: {
+    type: Schema.Types.ObjectId,
+    ref: "RoomChat",
+    required: true,
+  },
+  created_at: { type: Date, default: Date.now },
+  expires_at: { type: Date, required: true }, // 7 ngày sau
 });
 
-// Indexes cho Matches
-matchSchema.index({ user1_id: 1, user2_id: 1 }, { unique: true }); // Ngăn match trùng lặp
-matchSchema.index({ start_date: 1 }); // Hỗ trợ kiểm tra thời hạn 7 ngày
-matchSchema.index({ status: 1 }); // Tăng tốc lọc match active
+// TỰ ĐỘNG XÓA SAU 7 NGÀY
+matchSchema.index({ expires_at: 1 }, { expireAfterSeconds: 0 });
 
-// Model cho Matches
-export const MatchModel: Model<IMatch> = mongoose.model<IMatch>('Match', matchSchema);
+// TRÁNH GHÉP ĐÔI 2 LẦN
+matchSchema.index({ user1_id: 1, user2_id: 1 }); // không unique
+matchSchema.index({ user2_id: 1, user1_id: 1 }); // tìm ngược
+
+// TÌM NHANH MATCH ĐANG CHỜ
+matchSchema.index({ status: 1, user1_id: 1 });
+matchSchema.index({ status: 1, user2_id: 1 });
+
+export const MatchModel: Model<IMatch> = mongoose.model<IMatch>(
+  "Match",
+  matchSchema
+);

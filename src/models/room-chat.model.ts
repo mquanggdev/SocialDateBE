@@ -3,7 +3,6 @@ import mongoose, { Schema, Document, Model } from "mongoose";
 export interface IRoomChat extends Document {
   participants: mongoose.Types.ObjectId[]; // 2 người trong phòng chat
   type: "friend" | "match"; // Loại chat: bạn bè hoặc match
-  match_id?: mongoose.Types.ObjectId; // Nếu là match, lưu lại match_id
   expired_at?: Date; // Thời hạn (chỉ có nếu type = "match")
   last_message?: mongoose.Types.ObjectId; // Tin nhắn cuối cùng (hiển thị preview)
   created_at: Date;
@@ -24,13 +23,6 @@ const roomChatSchema = new Schema<IRoomChat>(
       type: String,
       enum: ["friend", "match"],
       required: true,
-    },
-    match_id: {
-      type: Schema.Types.ObjectId,
-      ref: "Match",
-      required: function () {
-        return this.type === "match";
-      },
     },
     expired_at: {
       type: Date,

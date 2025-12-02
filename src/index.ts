@@ -13,14 +13,17 @@ import { setupSocket } from "./socket/users.socket";
 connectDatabase();
 
 const app: Express = express();
-app.use(cors({ origin: "*" }));
+app.use(cors({
+  origin: "http://localhost:3000",
+  credentials: true,
+}));
 app.use((req, res, next) => {
   if (req.is("multipart/form-data")) {
     return next();
   }
   bodyParser.json()(req, res, next);
 });
-const port: number | string = process.env.PORT || 5000;
+const port: number | string = process.env.PORT || 5001;
 app.use(express.json());
 // app.use(express.raw({ type: "application/json" })); // Cho webhook
 

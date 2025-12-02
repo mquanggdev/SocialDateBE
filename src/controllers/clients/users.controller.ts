@@ -14,47 +14,43 @@ export const login = async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
 
-    // Tìm người dùng
-    const user = await UserModel.findOne({ email }).select('+password');
+    // Tìm user + lấy cả password để so sánh
+    const user = await UserModel.findOne({ email }).select("+password");
     if (!user) {
       return res.status(404).json({
         status: 404,
-        message: 'Email không tồn tại',
+        message: "Email không tồn tại",
       });
     }
 
-    // So sánh mật khẩu
+    // Kiểm tra mật khẩu
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
       return res.status(401).json({
         status: 401,
-        message: 'Mật khẩu không chính xác',
+        message: "Mật khẩu không chính xác",
       });
     }
 
-    // Kiểm tra khóa bí mật JWT
-    const jwtSecret = process.env.ACCESS_PRIVATE_KEY;
-    if (!jwtSecret) {
-      console.error('Khóa bí mật JWT không được cấu hình');
-      return res.status(500).json({
-        status: 500,
-        message: 'Lỗi server: Cấu hình không hợp lệ',
-      });
-    }
-
-    // Cập nhật trạng thái người dùng
+    // Cập nhật trạng thái online
+    user.status = "online";
     user.last_active = new Date();
-    user.status = 'online';
     await user.save();
 
     // Tạo JWT token
+    const jwtSecret = process.env.ACCESS_PRIVATE_KEY;
+    if (!jwtSecret) {
+      console.error("JWT secret chưa được cấu hình!");
+      return res.status(500).json({ status: 500, message: "Lỗi server" });
+    }
+
     const token = jwt.sign(
       { _id: user._id, email: user.email },
       jwtSecret,
-      { expiresIn: '7d' }
+      { expiresIn: "7d" }
     );
 
-    // Trả về thông tin người dùng
+    // Trả về đầy đủ thông tin theo model mới
     const userResponse = {
       _id: user._id,
       email: user.email,
@@ -63,14 +59,19 @@ export const login = async (req: Request, res: Response) => {
       address: user.address,
       phone: user.phone,
       gender: user.gender,
-      avatar_url: user.avatar_url,
-      bio: user.bio,
-      interests: user.interests,
-      match_preferences: user.match_preferences,
+      avatar_url: user.avatar_url || "",
+      bio: user.bio || "",
+      interests: user.interests || [],
+      match_preferences: user.match_preferences || {},
       location: user.location,
-      friends:user.friends,
-      request_to_friend:user.request_to_friend,
-      request_to_me:user.request_to_me,
+      friends: user.friends || [],
+      request_to_friend: user.request_to_friend || [],
+      request_to_me: user.request_to_me || [],
+      current_match: user.current_match || null,
+      ready_to_match: user.ready_to_match || { is_ready: false, requested_at: null },
+      is_dating: user.is_dating || false,
+      dating_partner: user.dating_partner || null,
+      pending_like_target: user.pending_like_target || null,
       status: user.status,
       last_active: user.last_active,
       created_at: user.created_at,
@@ -79,15 +80,15 @@ export const login = async (req: Request, res: Response) => {
 
     return res.status(200).json({
       status: 200,
-      message: 'Đăng nhập thành công',
+      message: "Đăng nhập thành công",
       user: userResponse,
       token,
     });
   } catch (error) {
-    console.error('Lỗi khi đăng nhập:', error);
+    console.error("Lỗi đăng nhập:", error);
     return res.status(500).json({
       status: 500,
-      message: 'Lỗi server: Không thể đăng nhập',
+      message: "Lỗi server",
     });
   }
 };
@@ -99,37 +100,36 @@ export const register = async (req: Request, res: Response) => {
       email,
       password,
       full_name = `User${Date.now()}`,
-      birthday = '1970-01-01',
-      address = 'Vietnam',
-      phone = '0000000000',
-      gender = 'other',
-      avatar_url = 'default-avatar.jpg',
-      bio = '',
+      birthday = "1970-01-01",
+      address = "Việt Nam",
+      phone = "0000000000",
+      gender = "other",
+      avatar_url = "",
+      bio = "",
       interests = [],
       match_preferences = {
-        gender: 'other',
+        gender: "other",
         age_range: { min: 18, max: 50 },
         distance_km: 50,
         interests: [],
-        location_preference: '',
+        location_preference: "",
       },
-      location = { type: 'Point', coordinates: [0, 0] },
+      location = { type: "Point", coordinates: [0, 0] },
     } = req.body;
 
-    // Kiểm tra email đã tồn tại
-    const existingUser = await UserModel.findOne({ email }).lean();
+    // Kiểm tra email đã tồn tại chưa
+    const existingUser = await UserModel.findOne({ email });
     if (existingUser) {
       return res.status(400).json({
         status: 400,
-        message: 'Email đã được đăng ký trước đó',
+        message: "Email đã được sử dụng",
       });
     }
 
     // Mã hóa mật khẩu
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Tạo người dùng mới
+    // Tạo user mới với đầy đủ các field mới
     const newUser = new UserModel({
       email,
       password: hashedPassword,
@@ -144,24 +144,26 @@ export const register = async (req: Request, res: Response) => {
       match_preferences,
       location,
       friends: [],
-      request_to_friend:[],
-      request_to_me : [],
+      request_to_friend: [],
+      request_to_me: [],
       current_match: null,
-      ready_to_match: { 
+      ready_to_match: {
         is_ready: false,
         requested_at: null,
         max_wait_time: 3600,
       },
-      status: 'online',
+      is_dating: false,
+      dating_partner: null,
+      pending_like_target: null,
+      status: "online",
       last_active: new Date(),
       created_at: new Date(),
       updated_at: new Date(),
     });
 
-    // Lưu người dùng
     await newUser.save();
 
-  
+    // Trả về thông tin user (không có password)
     const userResponse = {
       _id: newUser._id,
       email: newUser.email,
@@ -175,24 +177,30 @@ export const register = async (req: Request, res: Response) => {
       interests: newUser.interests,
       match_preferences: newUser.match_preferences,
       location: newUser.location,
-      friends:newUser.friends,
-      request_to_friend:newUser.request_to_friend,
-      request_to_me:newUser.request_to_me,
+      friends: newUser.friends,
+      request_to_friend: newUser.request_to_friend,
+      request_to_me: newUser.request_to_me,
+      current_match: newUser.current_match,
+      ready_to_match: newUser.ready_to_match,
+      is_dating: newUser.is_dating,
+      dating_partner: newUser.dating_partner,
+      pending_like_target: newUser.pending_like_target,
       status: newUser.status,
+      last_active: newUser.last_active,
       created_at: newUser.created_at,
       updated_at: newUser.updated_at,
     };
 
     return res.status(201).json({
       status: 201,
-      message: 'Đăng ký thành công',
+      message: "Đăng ký thành công",
       user: userResponse,
     });
-  } catch (error) {
-    console.error('Lỗi khi đăng ký:', error);
+  } catch (error: any) {
+    console.error("Lỗi đăng ký:", error);
     return res.status(500).json({
       status: 500,
-      message: 'Lỗi server: Không thể đăng ký',
+      message: error.message || "Lỗi server",
     });
   }
 };

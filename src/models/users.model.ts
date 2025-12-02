@@ -11,8 +11,6 @@ export interface IUser extends Document {
   bio: string;
   interests: string[];
   gender: "male" | "female" | "other";
-
-  // 🔍 Tiêu chí ghép đôi (thay cho desired_topics + partner_requirements)
   match_preferences: {
     gender?: "male" | "female" | "other";
     age_range?: { min: number; max: number };
@@ -35,7 +33,10 @@ export interface IUser extends Document {
     requested_at: Date | null;
     max_wait_time: number;
   };
+  is_dating: boolean;
+  dating_partner: mongoose.Types.ObjectId;
   status: "online" | "offline" | "busy";
+  pending_like_target : mongoose.Types.ObjectId;
   socketId: string;
   last_active: Date;
   created_at: Date;
@@ -85,7 +86,13 @@ const userSchema = new Schema<IUser>(
       requested_at: { type: Date, default: null },
       max_wait_time: { type: Number, default: 3600 },
     },
-
+    is_dating: { type: Boolean, default: false },
+    dating_partner: { type: Schema.Types.ObjectId, ref: "User" },
+    pending_like_target: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
     status: {
       type: String,
       enum: ["online", "offline", "busy"],
@@ -105,7 +112,6 @@ const userSchema = new Schema<IUser>(
 userSchema.index({ email: 1 }, { unique: true });
 userSchema.index({ location: "2dsphere" });
 userSchema.index({ interests: "text" });
-userSchema.index({ current_match: 1 });
 userSchema.index({
   "ready_to_match.is_ready": 1,
   gender: 1,
@@ -115,6 +121,9 @@ userSchema.index({
 userSchema.index({ friends: 1 });
 userSchema.index({ request_to_friend: 1 });
 userSchema.index({ request_to_me: 1 });
+userSchema.index({ is_dating: 1 });
+userSchema.index({ dating_partner: 1 });
+userSchema.index({ current_match: 1, "ready_to_match.is_ready": 1 }); // chống spam ghép đôi
 
 export const UserModel: Model<IUser> = mongoose.model<IUser>(
   "User",
